@@ -29,16 +29,19 @@ _BIN_ENTRY_POINT = "main.rs"
 _LIB_ENTRY_POINT = "lib.rs"
 
 CrateInfo = provider(fields = [
-    "kind",              # str
-    "crate_name",        # str
-    "workspace_name",    # str
-    "crate_path",        # str
-    "version",           # str
-    "enabled_features",  # List[str]
-    "features",          # List[str]
-    "deps",              # List[target]
-    "transitive_deps",   # List[target]
-    "build_deps",        # List[target]
+    "kind",                   # str
+    "crate_name",             # str
+    "workspace_name",         # str
+    "crate_path",             # str
+    "version",                # str
+    "enabled_features",       # List[str]
+    "features",               # List[str]
+    "deps",                   # List[target]
+    "transitive_deps",        # List[target]
+    "build_deps",             # List[target]
+    "cargo_entry_point",      # str | None
+    "cargo_build_script",     # str | None
+    "cargo_build_deps",       # List[str]: "name@version[+feature...]"
 ])
 
 CargoProjectInfo = provider(fields = [
@@ -112,21 +115,37 @@ rust_cargo_properties_aspect = aspect(
     }
 )
 
+def _tag_value(tag, target):
+    parts = tag.split("=", 1)
+    if len(parts) != 2 or not parts[1]:
+        fail("malformed tag '{}' on target '{}': expected <name>=<value>".format(tag, target.label))
+    return parts[1]
+
 def _crate_info(ctx, target):
     features = []
+    cargo_entry_point = None
+    cargo_build_script = None
+    cargo_build_deps = []
     if _is_universe_crate(target):
         crate_name = target.label.name
         for tag in ctx.rule.attr.tags:
             if tag.startswith("crate-name"):
-                crate_name = tag.split("=")[1]
+                crate_name = _tag_value(tag, target)
     else:
         crate_name = ctx.rule.attr.name
         for tag in ctx.rule.attr.tags:
             if tag.startswith("crate-name"):
-                crate_name = tag.split("=")[1]
+                crate_name = _tag_value(tag, target)
             elif tag.startswith("declared-features"):
-                feature_str = tag.split("=")[1]
-                features = [f.strip() for f in feature_str.split(",") if f.strip()]
+                features = [f.strip() for f in _tag_value(tag, target).split(",") if f.strip()]
+            elif tag.startswith("cargo-entry-point"):
+                cargo_entry_point = _tag_value(tag, target)
+            elif tag.startswith("cargo-build-script"):
+                cargo_build_script = _tag_value(tag, target)
+            elif tag.startswith("cargo-build-dep"):
+                cargo_build_deps.append(_tag_value(tag, target))
+            elif tag.startswith("cargo-"):
+                fail("unrecognized cargo sync tag '{}' on target '{}'".format(tag, target.label))
 
     workspace_name = target.label.workspace_name
     crate_path = target.label.package
@@ -144,6 +163,9 @@ def _crate_info(ctx, target):
         deps = deps,
         transitive_deps = transitive_deps,
         build_deps = _crate_build_deps(ctx, target),
+        cargo_entry_point = cargo_entry_point,
+        cargo_build_script = cargo_build_script,
+        cargo_build_deps = cargo_build_deps,
     )
 
 def _generate_cargo_project(ctx, target, crate_info, properties_file, sources):
@@ -261,8 +283,17 @@ def _get_properties(target, ctx, source_files, crate_info):
     properties["version"] = crate_info.version
     if target_type in ["bin", "lib"]:
         properties["edition"] = ctx.rule.attr.edition or _DEFAULT_RUST_EDITION
-        entry_point_file = _entry_point_file(target, ctx, source_files)
-        properties["entry.point.path"] = _src_relpath(target, ctx, entry_point_file)
+        if crate_info.cargo_entry_point != None:
+            properties["entry.point.path"] = crate_info.cargo_entry_point
+        else:
+            entry_point_file = _entry_point_file(target, ctx, source_files)
+            properties["entry.point.path"] = _src_relpath(target, ctx, entry_point_file)
+        if crate_info.cargo_build_script != None:
+            properties["build.script"] = crate_info.cargo_build_script
+            for build_dep in crate_info.cargo_build_deps:
+                properties["build.dep." + _build_dep_name(build_dep)] = _build_dep_location(build_dep)
+        elif len(crate_info.cargo_build_deps) > 0:
+            fail("cargo-build-dep tags declared without a cargo-build-script tag on target '{}'".format(target.label))
         if len(_crate_build_deps_info(crate_info)) > 0:
             fail("Build deps support unimplemented")
     if target_type == "test" and ctx.rule.attr.crate == None:
@@ -306,6 +337,22 @@ def _package_path_from_root(label):
 
 def _crate_build_deps_info(crate_info):
     return [build_dep[CrateInfo].crate_name for build_dep in crate_info.build_deps]
+
+def _build_dep_name(build_dep):
+    return _build_dep_parts(build_dep)[0]
+
+def _build_dep_location(build_dep):
+    version_and_features = _build_dep_parts(build_dep)[1].split("+")
+    location = "version={}".format(version_and_features[0])
+    if len(version_and_features) > 1:
+        location += ";enabled.features={}".format(",".join(version_and_features[1:]))
+    return location
+
+def _build_dep_parts(build_dep):
+    parts = build_dep.split("@")
+    if len(parts) != 2 or not parts[0] or not parts[1].split("+")[0]:
+        fail("cargo-build-dep tag value '{}' must be of the form 'name@version[+feature...]'".format(build_dep))
+    return parts
 
 def _looks_like_cargo_build_script(target):
     return str(target.label).endswith("_")

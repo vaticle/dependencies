@@ -14,3 +14,4 @@ Cargo.lock
 Cargo.toml
 !library/crates/Cargo.lock
 !library/crates/Cargo.toml
+!tool/ide/test/**/Cargo.toml

@@ -195,6 +195,9 @@ maven.namespace(name = "typedb_maven", artifacts = [
 use_repo(maven, "typedb_maven")
 
 # Rust crates
+crate_versions = use_extension("//library/crates:crate_versions.bzl", "crate_versions_extension")
+use_repo(crate_versions, "crate_versions")
+
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.from_cargo(
     name = "crates",

@@ -5,6 +5,7 @@
 
 
 # Script for regenerating BUILD files after Cargo.toml update
+# Fetches a standalone cargo binary (no rust toolchain)
 
 set -ex
 

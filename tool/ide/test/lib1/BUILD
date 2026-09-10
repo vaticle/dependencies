@@ -9,6 +9,7 @@ load("@typedb_dependencies//tool/checkstyle:rules.bzl", "checkstyle_test")
 rust_library(
     name = "lib1",
     srcs = ["lib.rs"],
+    visibility = ["//visibility:public"],
 )
 
 rust_test(
